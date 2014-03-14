@@ -131,6 +131,27 @@ next-level elements."
   [obj]
   (Math/abs (.hashCode ^Object obj)))
 
+(defn- add-widget-watch [wdg reference f]
+  "Installs callback that will operate on widget when value of reference changes.
+  The reference to widget is weak, and when it's garbaged, the callback is uninstalled."
+  (let [wr (new java.lang.ref.WeakReference wdg)
+        cb (fn [_ _ _ nv]
+             (let [wdg (.get wr)]
+               (if (nil? wdg)
+                 (remove-watch reference wr)
+                 (neko.threading/post wdg (f wdg nv)))))]
+    (add-watch reference wr cb)))
+
+(defn- handle-ref [wdg val set]
+  "Checks whether given value is ref or normal value and apply set function accordingly"
+  (condp instance? val
+    clojure.lang.IRef (do
+                        (set wdg @val)
+                        (add-widget-watch wdg val
+                                          ; no reference to widget is being captured
+                                          (fn [wdg v] (set wdg v))))
+    :else (set wdg val)))
+
 ;; ## Implementation of different traits
 
 ;; ### Def attribute
@@ -147,10 +168,12 @@ next-level elements."
 ;; ### Basic traits
 
 (deftrait :text
-  "Sets widget's text to a string, integer ID or a keyword
+  "Sets widget's text to a string, reference, integer ID or a keyword
   representing the string resource provided to `:text` attribute."
-  [^TextView wdg, {:keys [text]} _]
-  (.setText wdg ^CharSequence (res/get-string text)))
+  [^TextView wdg, {:keys [text]}]
+  (handle-ref wdg text
+              (fn [^TextView wdg s] (.setText wdg ^CharSequence (res/get-string s)))))
+
 
 (defn- kw->unit-id [unit-kw]
   (case unit-kw
@@ -180,9 +203,10 @@ next-level elements."
   "Takes `:text-size` attribute which should be either integer or a
   dimension vector, and sets it to the widget."
   [^TextView wdg, {:keys [text-size]} _]
-  (if (vector? text-size)
-    (.setTextSize wdg (kw->unit-id (second text-size)) (first text-size))
-    (.setTextSize wdg text-size)))
+  (handle-ref wdg text-size (fn [^TextView wdg text-size]
+                              (if (vector? text-size)
+                                (.setTextSize wdg (kw->unit-id (second text-size)) (first text-size))
+                                (.setTextSize wdg text-size)))))
 
 (deftrait :image
   "Takes `:image` attribute which can be a resource ID, resource
